@@ -21,7 +21,11 @@ public class FrontierGame : MonoBehaviour
     class Pickup { public GameObject go; public bool crystal; }
     class FloatText { public Vector3 pos; public string text; public Color color; public float expires; }
     readonly string[] players={"Dispatcher","Omen","Challenger","Zenith","Executioner"};
-    readonly string[] npcs={"Insurgent","Pancake","Striker","Bob","Spitfire","Imperial"};
+    // Karten-NPCs: zwei AssetPack-Modelle (Bomber, Corvette_05); Boss nutzt Carrier.
+    readonly string[] npcs={"Bomber","Corvette_05"};
+    const string BossShipModel="Carrier";
+    // Relatives Groessensystem wie bisher: Spieler/NPC = 15, Boss = 25.
+    const float PlayerShipWidth=15f,NpcShipWidth=15f, BossShipWidth=25f;
     readonly List<Enemy> enemies=new List<Enemy>();
     readonly List<Shot> shots=new List<Shot>();
     readonly List<Pickup> pickups=new List<Pickup>();
@@ -74,20 +78,40 @@ public class FrontierGame : MonoBehaviour
     }
     GameObject Ship(string model,Vector3 position,bool hostile){
         var root=new GameObject(model);root.transform.position=position+Vector3.up*1.8f;
-        var prefab=Resources.Load<GameObject>("Ships/"+model+"/"+model);
+        var prefab=LoadShipPrefab(model);
+        bool visualReady=false;
         if(prefab!=null){
             var obj=Instantiate(prefab,root.transform);obj.name=model+" 3D";
             Bounds b=new Bounds(obj.transform.position,Vector3.zero);bool any=false;
             foreach(var r in obj.GetComponentsInChildren<Renderer>()){if(!any){b=r.bounds;any=true;}else b.Encapsulate(r.bounds);}
-            if(any){float factor=15f/Mathf.Max(.01f,Mathf.Max(b.size.x,b.size.z));obj.transform.localScale*=factor;obj.transform.localPosition-=root.transform.InverseTransformVector((b.center-root.transform.position)*factor);}
-            // Farbgebung nur an den instanziierten Schiffsmodellen; FBX-Materialien bleiben erhalten.
-            ApplyShipVariantTexture(obj, model, hostile);
-            // Die Original-FBX-Dateien bleiben als Unity-importierbare 3D-Assets erhalten.
-        }else{
-            Primitive(PrimitiveType.Capsule,"Fallback ship",root.transform.position,new Vector3(9,1.8f,15),Mat(hostile?"enemy":"player",hostile?Color.red:Color.cyan),root.transform);
+            if(any){
+                float factor=PlayerShipWidth/Mathf.Max(.01f,Mathf.Max(b.size.x,b.size.z));
+                obj.transform.localScale*=factor;
+                obj.transform.localPosition-=root.transform.InverseTransformVector((b.center-root.transform.position)*factor);
+                // Farbgebung nur an den instanziierten Schiffsmodellen; FBX-Materialien bleiben erhalten.
+                ApplyShipVariantTexture(obj, model, hostile);
+                visualReady=obj.GetComponentsInChildren<Renderer>().Length>0;
+            }
+            if(!visualReady){
+                // AssetPack-FBX ohne Renderer/Material -> unsichtbar; Fallback nutzen.
+                Destroy(obj);
+            }
+        }
+        if(!visualReady){
+            Primitive(PrimitiveType.Capsule,"Fallback ship",root.transform.position,new Vector3(9,1.8f,PlayerShipWidth),Mat(hostile?"enemy":"player",hostile?HostileShipTint:Color.cyan),root.transform);
         }
         PlaceShipAboveStructures(root);
-        var collider=root.AddComponent<SphereCollider>();collider.radius=9.9f;return root;
+        var collider=root.AddComponent<SphereCollider>();collider.radius=PlayerShipWidth*.66f;return root;
+    }
+    // Resources/Ships/<Name>/<Name> wie die alten Schiffe; zusaetzlich Klein-/Grossschreibung tolerieren.
+    GameObject LoadShipPrefab(string model){
+        var prefab=Resources.Load<GameObject>("Ships/"+model+"/"+model);
+        if(prefab!=null)return prefab;
+        if(string.IsNullOrEmpty(model))return null;
+        string lower=char.ToLowerInvariant(model[0])+model.Substring(1);
+        prefab=Resources.Load<GameObject>("Ships/"+model+"/"+lower);
+        if(prefab!=null)return prefab;
+        return Resources.Load<GameObject>("Ships/"+lower+"/"+lower);
     }
     void DrawMapMarker(Rect mapRect, Vector3 world, Color color, string symbol, int size){
         float x=mapRect.x+Mathf.Clamp01(world.x/MapW)*mapRect.width;
@@ -98,23 +122,55 @@ public class FrontierGame : MonoBehaviour
     }
     // Originale Farbtexturen aus Assets/Resources/Ships/<Modell>/ laden.
     // Kein pauschaler Farbfilter: Die Details der Originaltextur bleiben erhalten.
+    // AssetPack-Schiffe ohne Red/Blue-PNG: bei hostile roetlich tinten.
+    static readonly Color HostileShipTint=new Color(1f,.38f,.34f,1f);
     void ApplyShipVariantTexture(GameObject visual, string model, bool hostile){
         string variant=hostile ? "Red" : "Blue";
         Texture2D texture=Resources.Load<Texture2D>("Ships/"+model+"/"+model+"_"+variant);
         if(texture==null){
-            Debug.LogWarning("Exoterium: Schiffstextur fehlt: "+model+"_"+variant);
+            // AssetPack-Schiffe (Bomber/Corvette_05/Carrier): kein Red/Blue-PNG -> roetlich tinten.
+            if(hostile) TintShipVisual(visual, HostileShipTint);
+            else Debug.LogWarning("Exoterium: Schiffstextur fehlt: "+model+"_"+variant);
             return;
         }
         foreach(var renderer in visual.GetComponentsInChildren<Renderer>()){
             var originals=renderer.sharedMaterials;
+            if(originals==null||originals.Length==0){
+                var filled=new Material(Mat("shiptex-"+model+"-"+variant,Color.white));
+                if(filled.HasProperty("_BaseMap"))filled.SetTexture("_BaseMap",texture);
+                if(filled.HasProperty("_MainTex"))filled.SetTexture("_MainTex",texture);
+                renderer.material=filled;
+                continue;
+            }
             var instances=new Material[originals.Length];
             for(int i=0;i<originals.Length;i++){
-                if(originals[i]==null)continue;
-                Material material=new Material(originals[i]);
+                Material material=originals[i]!=null?new Material(originals[i]):new Material(Mat("shiptex-"+model+"-"+variant,Color.white));
                 if(material.HasProperty("_BaseMap"))material.SetTexture("_BaseMap",texture);
                 if(material.HasProperty("_MainTex"))material.SetTexture("_MainTex",texture);
                 if(material.HasProperty("_BaseColor"))material.SetColor("_BaseColor",Color.white);
                 if(material.HasProperty("_Color"))material.SetColor("_Color",Color.white);
+                instances[i]=material;
+            }
+            renderer.materials=instances;
+        }
+    }
+    void TintShipVisual(GameObject visual, Color tint){
+        Material fallback=Mat("hostile-tint-"+tint.r+"-"+tint.g+"-"+tint.b,tint);
+        foreach(var renderer in visual.GetComponentsInChildren<Renderer>()){
+            var originals=renderer.sharedMaterials;
+            if(originals==null||originals.Length==0){renderer.material=new Material(fallback);continue;}
+            var instances=new Material[originals.Length];
+            for(int i=0;i<originals.Length;i++){
+                // Keine null-Slots lassen – sonst NRE in PlaceShipAboveStructures und leere Karte 1.
+                Material material=originals[i]!=null?new Material(originals[i]):new Material(fallback);
+                if(material.HasProperty("_BaseColor")){
+                    Color c=material.GetColor("_BaseColor");
+                    material.SetColor("_BaseColor",new Color(Mathf.Min(1f,c.r*tint.r+.15f),c.g*tint.g,c.b*tint.b,c.a));
+                }
+                if(material.HasProperty("_Color")){
+                    Color c=material.color;
+                    material.color=new Color(Mathf.Min(1f,c.r*tint.r+.15f),c.g*tint.g,c.b*tint.b,c.a);
+                }
                 instances[i]=material;
             }
             renderer.materials=instances;
@@ -145,6 +201,7 @@ public class FrontierGame : MonoBehaviour
         foreach(var r in structure.GetComponentsInChildren<Renderer>()){
             Material[] materials=r.materials;
             foreach(var m in materials){
+                if(m==null)continue;
                 m.renderQueue=2001;
                 if(m.HasProperty("_ZWrite"))m.SetFloat("_ZWrite",0f);
             }
@@ -154,7 +211,10 @@ public class FrontierGame : MonoBehaviour
     void PlaceShipAboveStructures(GameObject ship){
         foreach(var r in ship.GetComponentsInChildren<Renderer>()){
             Material[] materials=r.materials;
-            foreach(var m in materials)m.renderQueue=2010;
+            for(int i=0;i<materials.Length;i++){
+                if(materials[i]==null)materials[i]=Mat("ship-fallback",HostileShipTint);
+                materials[i].renderQueue=2010;
+            }
             r.materials=materials;
         }
     }
@@ -179,23 +239,44 @@ public class FrontierGame : MonoBehaviour
         stationZone=Ring("Station Schutzzone",stationPoint,SafeRadius,new Color(.2f,.8f,1f),.35f);stationZone.SetActive(data.map==0);
         gateZone=Ring("Tor Schutzzone",GatePoint,SafeRadius,new Color(.2f,.8f,1f),.35f);
         targetRing=Ring("TARGET LOCK",Vector3.zero,6.7f,new Color(1,.7f,.15f),.75f);targetRing.SetActive(false);
-        // Boss bleibt in der Kartenmitte; normale NPCs erscheinen auch in Spielernaehe.
-        if(data.map==0) SpawnEnemy(true);
+        // NPCs zuerst (auch in Spielernaehe), danach Boss – ein Boss-Fehler darf Karte 1 nicht leeren.
         for(int i=0;i<25;i++)SpawnEnemy(false, i);
+        if(data.map==0) SpawnEnemy(true);
         for(int i=0;i<22;i++)SpawnPickup();
     }
     void SpawnEnemy(bool boss, int spawnIndex=-1){
         Vector3 pos;
-        if(boss) pos=new Vector3(1000f,0,675f);
-        else {
-            // NPCs ueber die gesamte Karte verteilen; nicht direkt an Station/Tor.
+        Vector3 bossCenter=new Vector3(1000f,0,675f);
+        if(boss) pos=bossCenter;
+        else if(spawnIndex>=0 && spawnIndex<8){
+            // Erste NPCs sichtbar in Spielernaehe (Kommentar war bisher nicht umgesetzt).
+            Vector3 around=player!=null?Flat(player.transform.position):stationPoint+new Vector3(55f,0,-20f);
+            float ang=spawnIndex*(Mathf.PI*2f/8f)+(data.map*.35f);
+            float dist=195f+(spawnIndex%3)*35f;
+            pos=ClampMap(around+new Vector3(Mathf.Cos(ang)*dist,0,Mathf.Sin(ang)*dist));
+            if(Dist(pos,GatePoint)<110f||Dist(pos,bossCenter)<90f)
+                pos=ClampMap(around+new Vector3(Mathf.Cos(ang+1.1f)*(dist+40f),0,Mathf.Sin(ang+1.1f)*(dist+40f)));
+        }else{
+            // Restliche NPCs ueber die gesamte Karte; nicht direkt an Station/Tor/Boss.
+            int guard=0;
             do {
                 pos=new Vector3(UnityEngine.Random.Range(90f,MapW-90f),0,UnityEngine.Random.Range(90f,MapH-90f));
-            } while(Dist(pos,stationPoint)<185f || Dist(pos,GatePoint)<130f
-                    || Dist(pos,new Vector3(1000f,0,675f))<100f);
+                guard++;
+            } while(guard<40 && ((data.map==0&&Dist(pos,stationPoint)<160f) || Dist(pos,GatePoint)<130f
+                    || Dist(pos,bossCenter)<100f));
         }
-        var e=new Enemy{boss=boss,kind=boss?5:UnityEngine.Random.Range(0,6),name=boss?"Aurora-Boss":"NPC",maxHull=boss?4800:650,maxShield=boss?2500:330};
-        e.hull=e.maxHull;e.shield=e.maxShield;e.aggro=false;e.go=Ship(npcs[e.kind],pos,true);if(boss)ScaleShipVisual(e.go,25f);e.go.name=e.name+" – "+npcs[e.kind];e.waypoint=pos;e.roamAt=0f;e.nextRocket=Time.time+UnityEngine.Random.Range(4f,9f);enemies.Add(e);
+        int kind=boss?0:spawnIndex>=0?spawnIndex%npcs.Length:UnityEngine.Random.Range(0,npcs.Length);
+        string model=boss?BossShipModel:npcs[kind];
+        try{
+            var e=new Enemy{boss=boss,kind=kind,name=boss?"Aurora-Boss":"NPC",maxHull=boss?4800:650,maxShield=boss?2500:330};
+            e.hull=e.maxHull;e.shield=e.maxShield;e.aggro=false;
+            e.go=Ship(model,pos,true);
+            // Explizit dieselbe relative Groesse wie bisher (NPC=Spielerbreite, Boss groesser).
+            ScaleShipVisual(e.go, boss?BossShipWidth:NpcShipWidth);
+            e.go.name=e.name+" – "+model;e.waypoint=pos;e.roamAt=0f;e.nextRocket=Time.time+UnityEngine.Random.Range(4f,9f);enemies.Add(e);
+        }catch(Exception ex){
+            Debug.LogWarning("Exoterium: SpawnEnemy fehlgeschlagen ("+model+"): "+ex.Message);
+        }
     }
     void SpawnPickup(){
         bool crystal=UnityEngine.Random.value<.35f;
