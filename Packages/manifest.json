@@ -1,0 +1,15 @@
+{
+  "dependencies": {
+    "com.unity.ai.assistant": "2.21.0-pre.2",
+    "com.unity.cloud.gltfast": "6.20.0",
+    "com.unity.ugui": "2.6.0",
+    "com.unity.modules.adaptiveperformance": "1.0.0",
+    "com.unity.modules.imgui": "1.0.0",
+    "com.unity.modules.jsonserialize": "1.0.0",
+    "com.unity.modules.physics": "1.0.0",
+    "com.unity.modules.physicscore2d": "1.0.0",
+    "com.unity.modules.tetgen": "1.0.0",
+    "com.unity.modules.timelinefoundation": "1.0.0",
+    "com.unity.modules.vectorgraphics": "1.0.0"
+  }
+}
